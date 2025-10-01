@@ -11,11 +11,13 @@ from claude_agent_sdk import (
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
+    tool,
+    create_sdk_mcp_server,
 )
 import asyncio
 import json
 import sys
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class ClaudeSDKWrapper:
@@ -24,6 +26,7 @@ class ClaudeSDKWrapper:
     def __init__(self):
         self.client: Optional[ClaudeSDKClient] = None
         self.receive_task: Optional[asyncio.Task] = None
+        self.tool_result_futures: Dict[str, asyncio.Future] = {}  # tool_use_id -> Future
 
     def write_output(self, data: Dict[str, Any]):
         """Write JSON output to stdout."""
@@ -69,11 +72,77 @@ class ClaudeSDKWrapper:
         except Exception as e:
             self.write_output({"type": "error", "error": str(e)})
 
-    async def handle_create_client(self, options: Dict[str, Any], initial_prompt: Optional[str] = None):
+    def create_tool_handler(self, tool_name: str, tool_description: str, tool_input_schema: Dict[str, Any]):
+        """Dynamically create a tool handler that emits to stdout and waits for external result."""
+        @tool(tool_name, tool_description, tool_input_schema)
+        async def generic_tool_handler(args: Dict[str, Any]):
+            # Generate a unique ID for this tool invocation
+            tool_use_id = f"tool_{id(args)}_{asyncio.get_event_loop().time()}"
+
+            # Emit tool invocation to stdout
+            self.write_output({
+                "type": "tool_invocation",
+                "tool_use_id": tool_use_id,
+                "name": tool_name,
+                "input": args
+            })
+
+            # Create a future to wait for the external result
+            future = asyncio.Future()
+            self.tool_result_futures[tool_use_id] = future
+
+            # Wait for external result
+            try:
+                result = await future
+                return {
+                    "content": [
+                        {"type": "text", "text": result.get("content", "")}
+                    ],
+                    "isError": result.get("is_error", False)
+                }
+            finally:
+                # Clean up
+                self.tool_result_futures.pop(tool_use_id, None)
+
+        return generic_tool_handler
+
+    async def handle_create_client(self, options: Dict[str, Any], initial_prompt: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None):
         """Create the Claude SDK client and connect in streaming mode."""
         try:
             # Convert dict options to ClaudeAgentOptions
             agent_options = ClaudeAgentOptions(**options) if options else ClaudeAgentOptions()
+
+            # If tools are provided, create an SDK MCP server with them
+            if tools:
+                tool_handlers = []
+                allowed_tools = []
+
+                for tool_def in tools:
+                    tool_name = tool_def["name"]
+                    tool_description = tool_def["description"]
+                    tool_input_schema = tool_def["input_schema"]
+
+                    handler = self.create_tool_handler(tool_name, tool_description, tool_input_schema)
+                    tool_handlers.append(handler)
+                    allowed_tools.append(f"mcp__external_tools__{tool_name}")
+
+                # Create SDK MCP server with all tools
+                server = create_sdk_mcp_server(
+                    name="external_tools",
+                    version="1.0.0",
+                    tools=tool_handlers
+                )
+
+                # Add MCP server to agent options
+                if not hasattr(agent_options, 'mcp_servers') or agent_options.mcp_servers is None:
+                    agent_options.mcp_servers = {}
+                agent_options.mcp_servers["external_tools"] = server
+
+                # Set allowed tools
+                if not hasattr(agent_options, 'allowed_tools') or agent_options.allowed_tools is None:
+                    agent_options.allowed_tools = []
+                agent_options.allowed_tools.extend(allowed_tools)
+
             self.client = ClaudeSDKClient(agent_options)
 
             # Always connect in streaming mode (required for the wrapper to work)
@@ -134,6 +203,21 @@ class ClaudeSDKWrapper:
         except Exception as e:
             self.write_output({"type": "error", "command": "disconnect", "error": str(e)})
 
+    async def handle_tool_result(self, tool_use_id: str, content: str, is_error: bool = False):
+        """Receive a tool result from the external caller and resolve the waiting future."""
+        try:
+            future = self.tool_result_futures.get(tool_use_id)
+            if future and not future.done():
+                future.set_result({
+                    "content": content,
+                    "is_error": is_error
+                })
+                self.write_output({"type": "response", "command": "tool_result", "success": True})
+            else:
+                self.write_output({"type": "error", "command": "tool_result", "error": f"No pending tool invocation with ID: {tool_use_id}"})
+        except Exception as e:
+            self.write_output({"type": "error", "command": "tool_result", "error": str(e)})
+
     async def process_command(self, command_data: Dict[str, Any]):
         """Process a single command from stdin."""
         command = command_data.get("command")
@@ -141,7 +225,8 @@ class ClaudeSDKWrapper:
         if command == "create_client":
             await self.handle_create_client(
                 command_data.get("options"),
-                command_data.get("initial_prompt")
+                command_data.get("initial_prompt"),
+                command_data.get("tools")
             )
         elif command == "query":
             await self.handle_query(command_data.get("prompt"))
@@ -149,6 +234,12 @@ class ClaudeSDKWrapper:
             await self.handle_interrupt()
         elif command == "disconnect":
             await self.handle_disconnect()
+        elif command == "tool_result":
+            await self.handle_tool_result(
+                command_data.get("tool_use_id"),
+                command_data.get("content"),
+                command_data.get("is_error", False)
+            )
         else:
             self.write_output({"type": "error", "error": f"Unknown command: {command}"})
 
