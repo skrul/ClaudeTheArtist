@@ -114,7 +114,7 @@ class ClaudeWrapperService {
             .deletingLastPathComponent()  // ClaudeSDKDemo
 
         let wrapperPath = projectRoot.appendingPathComponent("claude_sdk_wrapper.py")
-        let uvPath = URL(fileURLWithPath: "/Users/skrul/.local/bin/uv")
+        let uvPath = URL(fileURLWithPath: "/Users/danielraffel/Documents/ClaudeTheArtist/.uv/uv")
 
         print("Starting wrapper at: \(wrapperPath.path)")
         print("Using uv at: \(uvPath.path)")
@@ -136,6 +136,24 @@ class ClaudeWrapperService {
         // Set up environment
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+        // Check auth method (defaults to CLI auth)
+        let authMethod = UserDefaults.standard.string(forKey: "authMethod") ?? "Claude Code CLI"
+
+        if authMethod == "API Key" {
+            // Use API key from settings
+            if let apiKey = UserDefaults.standard.string(forKey: "anthropicApiKey"), !apiKey.isEmpty {
+                environment["ANTHROPIC_API_KEY"] = apiKey
+            } else {
+                print("Warning: API Key auth selected but no key provided")
+                environment.removeValue(forKey: "ANTHROPIC_API_KEY")
+            }
+        } else {
+            // Use Claude Code CLI auth - remove any API keys from environment
+            environment.removeValue(forKey: "ANTHROPIC_API_KEY")
+            environment.removeValue(forKey: "CLAUDE_API_KEY")
+        }
+
         process?.environment = environment
 
         do {
@@ -176,6 +194,7 @@ class ClaudeWrapperService {
             ]
 
             // Send create_client command with tools
+            // API key is set via ANTHROPIC_API_KEY environment variable
             try await sendCommand([
                 "command": "create_client",
                 "tools": tools
