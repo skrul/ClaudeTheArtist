@@ -10,6 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var service = ClaudeWrapperService()
     @State private var showingError = false
+    @State private var showingSettings = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -21,6 +22,10 @@ struct ContentView: View {
                         Text("Chat with Claude")
                             .font(.headline)
                         Spacer()
+                        Button(action: { showingSettings = true }) {
+                            Image(systemName: "gearshape")
+                        }
+                        .buttonStyle(.plain)
                         Circle()
                             .fill(service.isConnected ? Color.green : Color.red)
                             .frame(width: 8, height: 8)
@@ -63,6 +68,9 @@ struct ContentView: View {
             }
         } message: { error in
             Text(error)
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
         }
     }
 }

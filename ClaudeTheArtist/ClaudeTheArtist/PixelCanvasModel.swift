@@ -37,8 +37,29 @@ class PixelCanvasModel {
         pixels[y][x] = color
     }
 
-    /// Parse a hex color string (e.g., "#FF0000" or "FF0000") to Color
+    /// Parse a color string (hex like "#FF0000" or name like "red") to Color
     func parseColor(_ colorString: String) -> Color? {
+        let trimmed = colorString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        // Try color names first
+        switch trimmed {
+        case "red": return .red
+        case "green": return .green
+        case "blue": return .blue
+        case "yellow": return .yellow
+        case "orange": return .orange
+        case "purple": return .purple
+        case "pink": return .pink
+        case "brown": return .brown
+        case "black": return .black
+        case "white": return .white
+        case "gray", "grey": return .gray
+        case "cyan": return .cyan
+        case "magenta": return Color(red: 1, green: 0, blue: 1)
+        default: break
+        }
+
+        // Try hex parsing
         var hexString = colorString.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Remove # if present

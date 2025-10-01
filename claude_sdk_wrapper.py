@@ -4,6 +4,14 @@ JSON-based stdin/stdout interface for Claude Agent SDK.
 Provides a streaming interface for other applications to interact with Claude.
 """
 
+import os
+import sys
+
+# CRITICAL: Remove API keys before importing SDK to ensure CLI auth is used
+# This must happen BEFORE any claude_agent_sdk imports
+for key in ['ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_AUTH_TOKEN']:
+    os.environ.pop(key, None)
+
 from claude_agent_sdk import (
     ClaudeSDKClient,
     ClaudeAgentOptions,
@@ -16,7 +24,6 @@ from claude_agent_sdk import (
 )
 import asyncio
 import json
-import sys
 from typing import Optional, Dict, Any, List
 
 
